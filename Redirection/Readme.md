@@ -1,4 +1,4 @@
-```markdown
+
 # Packet03: Advanced XDP Redirection & Kernel FIB Router Lab Guide
 
 ## Overview
