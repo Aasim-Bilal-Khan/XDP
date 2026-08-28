@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-=======
->>>>>>> 0b21214 (Setup file for wifi access point added)
 # Packet03: Advanced XDP Redirection & Kernel FIB Router Lab Guide
 
 ## Overview
