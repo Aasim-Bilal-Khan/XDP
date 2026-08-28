@@ -9,17 +9,25 @@ This project implements and evaluates an in-kernel Layer 3 packet forwarding rou
 
 ```
 
-+---------------------+          +------------------------------------+          +---------------------+
-|   Jetson Nano/AGX   |          |         Middlebox Server           |          |  Laptop / Upstream  |
-|       (Client)      |          |            (xdpserver)             |          |     (NAT Gateway)   |
+```
+                                                                             +---------------------+
+                                                                             |   Public Internet   |
+                                                                             +----------^----------+
+                                                                                        |
+                                                                                        | (Wi-Fi / WAN)
+
+```
+
++---------------------+          +------------------------------------+          +----------v----------+
+|   Jetson Nano/AGX   |          |         Middlebox Server           |          |  ThinkPad Laptop    |
+|   (Traffic Client)  |          |            (xdpserver)             |          | (Internet Gateway)  |
 |                     |          |                                    |          |                     |
 |  [eno1]             |<==>| [ens8f0]                  [ens8f1] |<==>| [enp0s31f6]         |
 |  10.200.1.3/24      |  Direct  | 10.200.1.1/24        10.200.2.1/24 |  Direct  | 10.200.2.2/24       |
 |                     |  10G Link|                                    |  10G Link|   |                 |
-+---------------------+          +------------------------------------+          |   v (iptables NAT)  |
-| [wlp2s0] (Wi-Fi)    |
-| Public Internet     |
-+---------------------+
+|  Default Gateway:   |          |  (XDP L3 Router & Redirect Engine) |          |   +-(iptables NAT)--+
+|  10.200.1.1         |          |                                    |          | [wlp2s0] (Wi-Fi)    |
++---------------------+          +------------------------------------+          +---------------------+
 
 ```
 
@@ -27,11 +35,11 @@ This project implements and evaluates an in-kernel Layer 3 packet forwarding rou
 
 | Node | Interface | IPv4 Address | MAC Address | Function |
 | :--- | :--- | :--- | :--- | :--- |
-| **Jetson** | `eno1` | `10.200.1.3/24` | `48:b0:2d:ff:10:d0` | Traffic Generator (Default GW: `10.200.1.1`) |
-| **Middlebox (In)** | `ens8f0` | `10.200.1.1/24` | `b4:96:91:a3:76:70` | Ingress from Jetson |
-| **Middlebox (Out)**| `ens8f1` | `10.200.2.1/24` | `b4:96:91:a3:76:71` | Egress to Gateway (`10.200.2.2`) |
-| **Laptop (Egress)**| `enp0s31f6`| `10.200.2.2/24` | `fc:45:96:aa:a6:54` | Upstream Next-Hop & NAT Router |
-| **Laptop (WAN)** | `wlp2s0` | DHCP | Hardware Specific | Internet Access Interface |
+| **Jetson** | `eno1` | `10.200.1.3/24` | `48:b0:2d:ff:10:d0` | Client Generator (Points default route to Middlebox `10.200.1.1`) |
+| **Middlebox (In)** | `ens8f0` | `10.200.1.1/24` | `b4:96:91:a3:76:70` | Ingress from Jetson Subnet |
+| **Middlebox (Out)**| `ens8f1` | `10.200.2.1/24` | `b4:96:91:a3:76:71` | Egress to Laptop Gateway (`10.200.2.2`) |
+| **Laptop (Egress)**| `enp0s31f6`| `10.200.2.2/24` | `fc:45:96:aa:a6:54` | Interconnect Interface & Return Route to `10.200.1.0/24` |
+| **Laptop (WAN)** | `wlp2s0` | DHCP | Hardware Specific | **Active Internet Uplink / Access Point** |
 
 ---
 
@@ -128,7 +136,7 @@ char _license[] SEC("license") = "GPL";
 
 ## 4. System Setup & Configuration
 
-### Node 1: ThinkPad Laptop (Gateway & NAT Router)
+### Node 1: ThinkPad Laptop (Internet Access Point & NAT Router)
 
 ```bash
 # 1. Interface IP Assignment
@@ -136,18 +144,18 @@ sudo ip addr flush dev enp0s31f6
 sudo ip addr add 10.200.2.2/24 dev enp0s31f6
 sudo ip link set dev enp0s31f6 up
 
-# 2. Kernel Forwarding & Return Route
+# 2. Kernel Forwarding & Return Route to Subnet 1
 sudo sysctl -w net.ipv4.ip_forward=1
 sudo ip route replace 10.200.1.0/24 via 10.200.2.1 dev enp0s31f6
 
-# 3. NAT Masquerading via Wi-Fi Interface
+# 3. NAT Masquerading via Wi-Fi Interface (Internet Gateway)
 sudo iptables -t nat -A POSTROUTING -o wlp2s0 -j MASQUERADE
 sudo iptables -A FORWARD -i enp0s31f6 -o wlp2s0 -j ACCEPT
 sudo iptables -A FORWARD -i wlp2s0 -o enp0s31f6 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 ```
 
-### Node 2: Jetson (Client / Traffic Generator)
+### Node 2: Jetson (Traffic Generator / Client)
 
 ```bash
 # 1. Interface IP Assignment & Link Up
@@ -155,7 +163,7 @@ sudo ip addr flush dev eno1
 sudo ip addr add 10.200.1.3/24 dev eno1
 sudo ip link set dev eno1 up
 
-# 2. Default Gateway to Middlebox
+# 2. Default Gateway to Middlebox Ingress
 sudo ip route replace default via 10.200.1.1 dev eno1
 
 # 3. Static ARP Entry for Middlebox Ingress
